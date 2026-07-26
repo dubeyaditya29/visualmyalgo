@@ -1,0 +1,15 @@
+.function-inputs { margin:0 0 14px; padding:13px; border:1px solid var(--line); border-radius:10px; background:var(--accent-soft); }
+.function-inputs h3 { margin:0; font-size:15px; letter-spacing:-.02em; }
+.function-inputs h3 small { color:var(--muted); font-weight:500; }
+.function-inputs p { margin:5px 0 12px; color:var(--muted); font-size:12px; line-height:1.45; }
+.parameter-fields { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:9px; }
+.parameter-fields label { display:grid; gap:5px; color:var(--muted); font-size:11px; font-weight:700; }
+.parameter-fields input { min-width:0; border:1px solid var(--line); border-radius:7px; padding:8px; background:var(--pane); color:var(--ink); font:12px ui-monospace, monospace; }
+.execution-source { margin:14px 0 18px; border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--code); box-shadow:var(--shadow); }
+.execution-source-heading { display:flex; justify-content:space-between; padding:9px 12px; border-bottom:1px solid color-mix(in srgb, var(--line) 60%, transparent); color:#b8c3d9; font-size:12px; font-weight:700; }
+.execution-source-heading small { color:#8491a9; font-weight:500; }
+.execution-source pre { max-height:220px; margin:0; overflow:auto; padding:8px 0; color:#dfe8ff; font:12px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.execution-source pre > div { display:grid; grid-template-columns:38px minmax(0, 1fr); padding:1px 12px 1px 0; white-space:pre; }
+.execution-source pre > div > span { padding-right:10px; color:#8290aa; text-align:right; user-select:none; }
+.execution-source .active-source-line { background:color-mix(in srgb, var(--accent) 27%, transparent); box-shadow:inset 3px 0 0 var(--accent); }
+.execution-source .active-source-line code { color:#fff; }
