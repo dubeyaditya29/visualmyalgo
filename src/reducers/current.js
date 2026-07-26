@@ -36,9 +36,9 @@ export const actions = {
   renameFile,
 };
 
-const homeTitles = ['Algorithm Visualizer'];
+const homeTitles = ['VisualMyAlgo'];
 const homeFiles = [ROOT_README_MD];
-const homeDescription = 'Algorithm Visualizer is an interactive online platform that visualizes algorithms from code.';
+const homeDescription = 'VisualMyAlgo is an interactive online platform that visualizes code and algorithms step-by-step.';
 const defaultState = {
   algorithm: {
     categoryKey: 'algorithm-visualizer',

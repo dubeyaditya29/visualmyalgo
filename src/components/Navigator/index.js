@@ -113,7 +113,7 @@ class Navigator extends React.Component {
         <div className={styles.footer}>
           <ExpandableListItem icon={faCode} label="Scratch Paper" onClick={() => this.toggleScratchPaper()}
                               opened={scratchPaperOpened}>
-            <ListItem indent label="New ..." to="/scratch-paper/new"/>
+            <ListItem indent label="+ Paste & Visualize Code" to="/scratch-paper/new"/>
             {
               scratchPapers.map(scratchPaper => (
                 <ListItem indent key={scratchPaper.key} selected={scratchPaper.key === gistId}
