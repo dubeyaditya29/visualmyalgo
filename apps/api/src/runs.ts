@@ -4,33 +4,115 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import type { Language, RunRequest, RunStatus, TraceEvent } from '@visualmyalgo/protocol';
+import type { Language, RunRequest, RunStatus, SerializableValue, StackFrame, TraceEvent } from '@visualmyalgo/protocol';
+import { generatePythonTracer, parseVmaTraceLines, type RawTracePayload } from './pythonTracer.js';
 
-const LIMITS = { sourceBytes: 100_000, outputBytes: 64_000, timeoutMs: 20_000, queueSize: 20 };
+const LIMITS = { sourceBytes: 100_000, outputBytes: 64_000, timeoutMs: 20_000, queueSize: 20, maxTraceEvents: 8_000 };
 
 type Run = { id: string; request: RunRequest; status: RunStatus | 'queued'; events: EventEmitter; history: TraceEvent[]; result?: { status: RunStatus; message?: string }; cancelled: boolean; controller?: AbortController };
-type Command = { image: string; filename: string; args: string[] };
-
-const commands: Record<Language, Command> = {
-  javascript: { image: 'node:20-alpine', filename: 'main.js', args: ['node', '/workspace/main.js'] },
-  python: { image: 'python:3.12-alpine', filename: 'main.py', args: ['python', '/workspace/main.py'] },
-  cpp: { image: 'gcc:14', filename: 'main.cpp', args: ['sh', '-lc', 'g++ -g /workspace/main.cpp -o /tmp/main && /tmp/main'] },
-  java: { image: 'eclipse-temurin:21-jdk', filename: 'Main.java', args: ['sh', '-lc', 'javac -g /workspace/Main.java -d /tmp && java -cp /tmp Main'] },
-};
+type Command = { image: string; files: Array<{ filename: string; contents: string }>; args: string[] };
 
 export function executableLines(code: string) {
   return code.split('\n').flatMap((line, index) => line.trim() && !line.trim().startsWith('//') && !line.trim().startsWith('#') ? [index + 1] : []);
 }
 
-function baseEvent(id: number, line: number, type: TraceEvent['type'], elapsedMs: number, message?: string, output?: string): TraceEvent {
-  return { id, line, type, elapsedMs, stack: [{ name: 'main', line, locals: {} }], message, output };
+function baseEvent(id: number, line: number, type: TraceEvent['type'], elapsedMs: number, message?: string, output?: string, stack?: StackFrame[]): TraceEvent {
+  return { id, line, type, elapsedMs, stack: stack || [{ name: 'main', line, locals: {} }], message, output };
+}
+
+function toSerializable(value: unknown, depth = 0): SerializableValue {
+  if (depth > 4) return String(value);
+  if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (Array.isArray(value)) return value.slice(0, 60).map(item => toSerializable(item, depth + 1));
+  if (typeof value === 'object') {
+    const result: Record<string, SerializableValue> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 40)) {
+      result[key] = toSerializable(item, depth + 1);
+    }
+    return result;
+  }
+  return String(value);
+}
+
+function normalizeTrace(raw: RawTracePayload, id: number, fallbackElapsed: number): TraceEvent {
+  const line = Number(raw.line) || 1;
+  const stack = (raw.stack || [{ name: 'main', line, locals: {} }]).map(frame => ({
+    name: frame.name || 'main',
+    line: Number(frame.line) || line,
+    locals: Object.fromEntries(Object.entries(frame.locals || {}).map(([key, value]) => [key, toSerializable(value)])),
+  }));
+  return {
+    id,
+    line,
+    type: raw.type === 'breakpoint' || raw.type === 'error' || raw.type === 'stdout' || raw.type === 'stderr' ? raw.type : 'step',
+    stack,
+    message: raw.message,
+    output: raw.output,
+    elapsedMs: typeof raw.elapsedMs === 'number' ? raw.elapsedMs : fallbackElapsed,
+  };
+}
+
+export async function checkDocker(timeoutMs = 2500): Promise<boolean> {
+  return await new Promise(resolve => {
+    const child = spawn('docker', ['info'], { stdio: 'ignore' });
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve(false);
+    }, timeoutMs);
+    child.on('error', () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+    child.on('close', code => {
+      clearTimeout(timer);
+      resolve(code === 0);
+    });
+  });
+}
+
+function classifyFailure(stderr: string, code: number | null): { status: RunStatus; message: string } {
+  const message = stderr.trim() || (code === null ? 'Execution failed.' : `Program exited with status ${code}.`);
+  if (/Cannot connect to the Docker daemon|docker\.sock|Is the docker daemon running|executable file not found in \$PATH|ENOENT/i.test(message)) {
+    return {
+      status: 'runtime-error',
+      message: 'Docker is not available. Start Docker Desktop, then click Run again. Java, Python, and C++ need Docker to execute.',
+    };
+  }
+  if (/error:|SyntaxError|cannot find symbol|compilation|javac|g\+\+|Traceback \(most recent call last\):/i.test(message) || /Main\.java:\d+:\s*error:/i.test(message)) {
+    const isSyntax = /SyntaxError|javac|error:|cannot find symbol|compilation failed/i.test(message);
+    return { status: isSyntax ? 'compile-error' : 'runtime-error', message };
+  }
+  return { status: 'runtime-error', message };
+}
+
+function buildCommand(request: RunRequest): Command {
+  if (request.language === 'python') {
+    return {
+      image: 'python:3.12-alpine',
+      files: [
+        { filename: 'program.py', contents: request.code },
+        { filename: 'main.py', contents: generatePythonTracer(request.breakpoints, LIMITS.maxTraceEvents) },
+      ],
+      args: ['python', '/workspace/main.py'],
+    };
+  }
+  if (request.language === 'javascript') {
+    return { image: 'node:20-alpine', files: [{ filename: 'main.js', contents: request.code }], args: ['node', '/workspace/main.js'] };
+  }
+  if (request.language === 'cpp') {
+    return { image: 'gcc:14', files: [{ filename: 'main.cpp', contents: request.code }], args: ['sh', '-lc', 'g++ -g /workspace/main.cpp -o /tmp/main && /tmp/main'] };
+  }
+  return {
+    image: 'eclipse-temurin:21-jdk',
+    files: [{ filename: 'Main.java', contents: request.code }],
+    args: ['sh', '-lc', 'javac -g /workspace/Main.java -d /tmp && java -cp /tmp Main'],
+  };
 }
 
 async function executeInContainer(request: RunRequest, signal: AbortSignal) {
-  const command = commands[request.language];
+  const command = buildCommand(request);
   const directory = await mkdtemp(join(tmpdir(), 'visualmyalgo-'));
-  const source = join(directory, command.filename);
-  await writeFile(source, request.code, { mode: 0o600 });
+  await Promise.all(command.files.map(file => writeFile(join(directory, file.filename), file.contents, { mode: 0o600 })));
   try {
     return await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve, reject) => {
       const child = spawn('docker', [
@@ -40,9 +122,9 @@ async function executeInContainer(request: RunRequest, signal: AbortSignal) {
       ], { stdio: ['pipe', 'pipe', 'pipe'], signal });
       let stdout = ''; let stderr = '';
       child.stdout.on('data', data => { stdout = (stdout + data).slice(0, LIMITS.outputBytes); });
-      child.stderr.on('data', data => { stderr = (stderr + data).slice(0, LIMITS.outputBytes); });
+      child.stderr.on('data', data => { stderr = (stderr + data).slice(0, LIMITS.outputBytes * 4); });
       child.on('error', reject);
-      child.on('close', code => resolve({ stdout, stderr, code }));
+      child.on('close', exitCode => resolve({ stdout, stderr, code: exitCode }));
       if (request.stdin) child.stdin.write(request.stdin);
       child.stdin.end();
     });
@@ -74,26 +156,48 @@ export class RunManager {
   private async process(run: Run) {
     run.status = 'running'; const started = Date.now(); let eventId = 0;
     const send = (event: TraceEvent) => { if (!run.cancelled) this.emit(run, 'trace', event); };
-    for (const line of executableLines(run.request.code)) {
-      if (run.cancelled) return this.finish(run, 'cancelled');
-      send(baseEvent(eventId++, line, run.request.breakpoints.includes(line) ? 'breakpoint' : 'step', Date.now() - started));
-    }
     run.controller = new AbortController();
     const timeout = setTimeout(() => run.controller?.abort(), LIMITS.timeoutMs);
+
     try {
       const result = await executeInContainer(run.request, run.controller.signal);
       if (run.cancelled) return this.finish(run, 'cancelled');
-      if (result.stdout) send(baseEvent(eventId++, executableLines(run.request.code).at(-1) || 1, 'stdout', Date.now() - started, undefined, result.stdout));
-      if (result.code === 0) return this.finish(run, 'completed');
-      const message = result.stderr || 'Program exited with a non-zero status.';
-      const status: RunStatus = /error:|syntaxerror|compilation/i.test(message) ? 'compile-error' : 'runtime-error';
-      send(baseEvent(eventId, 1, 'error', Date.now() - started, message));
-      return this.finish(run, status, message);
+
+      if (run.request.language === 'python') {
+        const parsed = parseVmaTraceLines(result.stderr);
+        for (const raw of parsed.traces.slice(0, LIMITS.maxTraceEvents)) {
+          send(normalizeTrace(raw, eventId++, Date.now() - started));
+        }
+        if (result.stdout) {
+          send(baseEvent(eventId++, parsed.traces.at(-1)?.line || 1, 'stdout', Date.now() - started, undefined, result.stdout));
+        }
+        if (result.code !== 0) {
+          const failure = classifyFailure(parsed.remainder || result.stdout, result.code);
+          if (!parsed.traces.some(item => item.type === 'error')) {
+            send(baseEvent(eventId, 1, 'error', Date.now() - started, failure.message));
+          }
+          return this.finish(run, failure.status, failure.message);
+        }
+        return this.finish(run, 'completed');
+      }
+
+      if (result.code !== 0) {
+        const failure = classifyFailure(result.stderr || result.stdout, result.code);
+        send(baseEvent(eventId, 1, 'error', Date.now() - started, failure.message));
+        return this.finish(run, failure.status, failure.message);
+      }
+
+      // Java / C++: execution works; real stepping lands in a later phase.
+      if (result.stdout) send(baseEvent(eventId++, 1, 'stdout', Date.now() - started, undefined, result.stdout));
+      return this.finish(run, 'completed');
     } catch (error) {
       const timedOut = run.controller.signal.aborted && !run.cancelled;
-      const message = timedOut ? 'Execution stopped after 20 seconds.' : error instanceof Error ? error.message : 'Execution failed.';
-      send(baseEvent(eventId, 1, 'error', Date.now() - started, message));
-      return this.finish(run, timedOut ? 'timed-out' : 'runtime-error', message);
+      const raw = error instanceof Error ? error.message : 'Execution failed.';
+      const failure = timedOut
+        ? { status: 'timed-out' as RunStatus, message: 'Execution stopped after 20 seconds.' }
+        : classifyFailure(raw, null);
+      send(baseEvent(eventId, 1, 'error', Date.now() - started, failure.message));
+      return this.finish(run, failure.status, failure.message);
     } finally { clearTimeout(timeout); }
   }
 }
