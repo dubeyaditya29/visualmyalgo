@@ -13,3 +13,18 @@
 .execution-source pre > div > span { padding-right:10px; color:#8290aa; text-align:right; user-select:none; }
 .execution-source .active-source-line { background:color-mix(in srgb, var(--accent) 27%, transparent); box-shadow:inset 3px 0 0 var(--accent); }
 .execution-source .active-source-line code { color:#fff; }
+.step-narrative { margin:10px 0 0; padding:10px 12px; border-radius:8px; background:var(--accent-soft); color:var(--ink); font-size:13px; font-weight:650; animation:fade-up .28s ease; }
+.docker-banner { padding:10px 28px; background:#fff4e5; color:#8a4b00; border-bottom:1px solid #f0d7a8; font-size:13px; font-weight:650; }
+:root[data-theme="dark"] .docker-banner { background:#3a2a14; color:#ffd9a0; border-bottom-color:#5a4020; }
+.compile-error { margin:0; white-space:pre-wrap; font:12px/1.5 ui-monospace, monospace; max-height:180px; overflow:auto; }
+.array-cell { transition: transform .22s ease, background .22s ease, border-color .22s ease, opacity .22s ease, box-shadow .22s ease; }
+.array-cell.is-in-range { border-color:color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.array-cell.is-out-of-range { opacity:.38; }
+.array-cell.is-pointer { padding-top:18px; }
+.array-cell .pointer-label { position:absolute; top:3px; left:50%; transform:translateX(-50%); white-space:nowrap; font:9px/1 ui-sans-serif, system-ui, sans-serif; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:var(--accent); }
+.array-cell.is-low { border-color:#2f9e7b; box-shadow:0 0 0 2px color-mix(in srgb, #2f9e7b 28%, transparent); }
+.array-cell.is-high { border-color:#d97706; box-shadow:0 0 0 2px color-mix(in srgb, #d97706 28%, transparent); }
+.array-cell.is-mid, .array-cell.is-pointer.is-active { transform:translateY(-6px) scale(1.04); animation:pulse-cell .55s ease; }
+.array-cell.is-mid .pointer-label, .array-cell.is-active .pointer-label { color:inherit; }
+@keyframes pulse-cell { from { transform:translateY(-2px) scale(.96); } to { transform:translateY(-6px) scale(1.04); } }
+@keyframes fade-up { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
